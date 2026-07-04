@@ -186,19 +186,19 @@ class NfcFlasher : AppCompatActivity() {
             }
 
             // Check for correct NFC type support
-            if (tagTechList[0] != "android.nfc.tech.NfcA") {
-                Log.v("Invalid tag type. Found:", tagTechList.toString())
+            // Tech list ordering is not a documented contract (NfcA is not always
+            // first, e.g. on Pixel 7 Pro), so check for support anywhere in the list
+            if (!tagTechList.contains("android.nfc.tech.NfcA")) {
+                Log.v("Invalid tag type. Found:", tagTechList.joinToString())
                 return
             }
 
-            // Do an explicit check for the ID. This ID *appears* to be constant across all models
+            // The UID is not actually constant across models/batches (e.g. newer 2.9"
+            // displays report "BMXR"), and reads are sometimes corrupted, so a mismatch
+            // is only worth a warning — the WaveShare SDK will fail to connect to
+            // non-WaveShare tags anyway, so proceeding is safe
             if (tagId != WaveShareUID) {
-                Log.v("Invalid tag ID", "$tagId != $WaveShareUID")
-                // Currently, this ID is sometimes coming back corrupted, so it is a unreliable check
-                // only enforce check if type != ndef, because in those cases we can't check AAR
-                if (intent.action != NfcAdapter.ACTION_NDEF_DISCOVERED) {
-                    return
-                }
+                Log.w("Tag ID mismatch", "$tagId != $WaveShareUID (proceeding anyway)")
             }
 
             // ACTION_NDEF_DISCOVERED has the filter applied for the AAR record *type*,

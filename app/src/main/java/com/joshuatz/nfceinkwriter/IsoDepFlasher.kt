@@ -73,6 +73,14 @@ object IsoDepFlasher {
             transceiveLogged(isoDep, "00A4040007D2760000850101", "SELECT")
             transceiveLogged(isoDep, "F0D801FE050000000000", "INIT")
             val descA = transceiveLogged(isoDep, "00D1000000", "DESC-A")
+
+            // The BMXR family answers with an 0xA0 descriptor block. Other displays
+            // (e.g. the 1.54" 200x200, which returns 0x6D00 here) speak a different
+            // SSD1681-style command set over 74-prefixed APDUs.
+            if (descA.isEmpty() || descA[0] != 0xA0.toByte()) {
+                Log.i(TAG, "DESC-A not A0 (${descA.toHex()}); using SSD1681/1.54in path")
+                return flash154(isoDep, bitmap, onProgress)
+            }
             transceiveLogged(isoDep, "F0D8000005000000000E", "DESC-B")
 
             val desc = parseDescriptor(descA)
@@ -284,5 +292,108 @@ object IsoDepFlasher {
             }
         }
         return false
+    }
+
+    // ----- 1.54" 200x200 black/white/red (SSD1681 over 74-prefixed APDUs) -----
+
+    private fun bytes(vararg ints: Int): ByteArray = ByteArray(ints.size) { ints[it].toByte() }
+
+    /** Writes an SSD1681 controller command byte, then (optionally) its data bytes. */
+    private fun ctrl(isoDep: IsoDep, cmd: Int, data: ByteArray? = null): Boolean {
+        val r1 = isoDep.transceive(bytes(0x74, 0x99, 0x00, 0x0D, 0x01, cmd))
+        if (!r1.isOk()) {
+            Log.e(TAG, "154 cmd %02X -> %s".format(cmd, r1.toHex())); return false
+        }
+        if (data != null) {
+            val r2 = isoDep.transceive(bytes(0x74, 0x9A, 0x00, 0x0E, data.size) + data)
+            if (!r2.isOk()) {
+                Log.e(TAG, "154 cmd %02X data -> %s".format(cmd, r2.toHex())); return false
+            }
+        }
+        return true
+    }
+
+    /** Streams a 5000-byte RAM plane in 250-byte chunks (74 9A 00 0E FA + data). */
+    private fun writeRam154(isoDep: IsoDep, plane: ByteArray, onProgress: (Int) -> Unit): Boolean {
+        val chunks = plane.size / 250
+        val header = bytes(0x74, 0x9A, 0x00, 0x0E, 0xFA)
+        for (i in 0 until chunks) {
+            val resp = isoDep.transceive(header + plane.copyOfRange(i * 250, i * 250 + 250))
+            if (!resp.isOk()) {
+                Log.e(TAG, "154 RAM chunk $i -> ${resp.toHex()}"); return false
+            }
+            onProgress(i * 100 / chunks)
+        }
+        return true
+    }
+
+    /**
+     * Flashes the 1.54" 200x200 4-colour (black/white/red/yellow) display. Auth,
+     * a short config register sequence, a single 2-bit RAM buffer (10000 bytes),
+     * then the refresh trigger and busy-poll. The panel is NFC-powered, so the
+     * poll (and the 10s settle) must keep the field alive through the refresh.
+     */
+    private fun flash154(isoDep: IsoDep, bitmap: Bitmap, onProgress: (Int) -> Unit): IsoDepResult {
+        return try {
+            // Auth with the app's fixed unlock key + init.
+            isoDep.transceive(bytes(0x74, 0xB1, 0x00, 0x00, 0x08, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77))
+            isoDep.transceive(bytes(0x74, 0x97, 0x00, 0x08, 0x00)); Thread.sleep(50)
+            isoDep.transceive(bytes(0x74, 0x97, 0x01, 0x08, 0x00)); Thread.sleep(200)
+            isoDep.transceive(bytes(0x74, 0x00, 0x15, 0x00, 0x00)); Thread.sleep(100)
+
+            // Panel config registers.
+            ctrl(isoDep, 0xE0, bytes(0x02))
+            ctrl(isoDep, 0xE6, bytes(0x5D))
+            ctrl(isoDep, 0xA5, bytes(0x00))
+            Thread.sleep(100)
+
+            // Begin RAM write, stream the 2-bit image, then commit.
+            isoDep.transceive(bytes(0x74, 0x01, 0x15, 0x01, 0x00))
+            val buf = encode154(bitmap)
+            Log.i(TAG, "1.54in encoded ${buf.size} bytes")
+            if (!writeRam154(isoDep, buf) { onProgress(it) }) {
+                return IsoDepResult(false, "1.54in: RAM write failed")
+            }
+            Thread.sleep(50)
+
+            // Trigger refresh; the panel is busy while the status byte reads 0.
+            isoDep.transceive(bytes(0x74, 0x02, 0x15, 0x02, 0x00))
+            Thread.sleep(10000)
+            var polls = 0
+            while (polls < 40) {
+                polls++
+                val r = isoDep.transceive(bytes(0x74, 0x9B, 0x00, 0x0F, 0x01))
+                if (r.isEmpty() || r[0].toInt() != 0) break
+                Thread.sleep(400)
+            }
+            // Power-down registers.
+            ctrl(isoDep, 0x02, bytes(0x00)); Thread.sleep(200)
+            ctrl(isoDep, 0x07, bytes(0xA5))
+
+            onProgress(100)
+            IsoDepResult(true, "Flashed 1.54\" display!")
+        } catch (e: Exception) {
+            Log.e(TAG, "1.54in flash failed", e)
+            IsoDepResult(false, "1.54in error: ${e.message}")
+        }
+    }
+
+    /**
+     * Quantises [bitmap] to the 4-colour palette and packs it into the 1.54"
+     * panel's single 2-bit RAM buffer: 200x200, 4 pixels per byte, 50 bytes/row
+     * (10000 bytes). Same packing/palette as the BMXR path.
+     */
+    private fun encode154(bitmap: Bitmap): ByteArray {
+        val size = 200
+        val scaled = Bitmap.createScaledBitmap(bitmap, size, size, false)
+        val indices = ByteArray(size * size)
+        val rowPixels = IntArray(size)
+        for (y in 0 until size) {
+            scaled.getPixels(rowPixels, 0, size, 0, y, size, 1)
+            for (x in 0 until size) {
+                indices[y * size + x] = quantize(rowPixels[x]).toByte()
+            }
+        }
+        return packIndices(indices, size, size)
     }
 }

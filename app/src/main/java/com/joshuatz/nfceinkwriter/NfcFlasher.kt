@@ -185,6 +185,28 @@ class NfcFlasher : AppCompatActivity() {
                 return
             }
 
+            // Newer displays (e.g. UID "BMXR") are IsoDep/ISO 14443-4 tags using a
+            // different, APDU-based protocol than the bundled NfcA JAR. Route them
+            // to the IsoDep flasher (4-colour uncompressed write path).
+            if (IsoDepFlasher.isSupported(detectedTag) && !mIsFlashing) {
+                Log.v("IsoDep", "IsoDep-capable tag detected, flashing via IsoDep")
+                mIsFlashing = true
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val result = IsoDepFlasher.flash4Color(detectedTag, bitmap) { pct ->
+                        runOnUiThread { updateProgressBar(pct) }
+                    }
+                    runOnUiThread {
+                        Toast.makeText(
+                            applicationContext,
+                            if (result.success) "Success! ${result.message}" else "FAILED: ${result.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        mIsFlashing = false
+                    }
+                }
+                return
+            }
+
             // Check for correct NFC type support
             // Tech list ordering is not a documented contract (NfcA is not always
             // first, e.g. on Pixel 7 Pro), so check for support anywhere in the list

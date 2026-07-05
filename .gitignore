@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# WaveShare proprietary artifacts (not redistributable)
+NFC.zip
+WaveShare NFC.apk

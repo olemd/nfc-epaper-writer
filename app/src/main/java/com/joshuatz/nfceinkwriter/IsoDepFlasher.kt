@@ -414,11 +414,14 @@ object IsoDepFlasher {
     /**
      * Dithers [bitmap] to the 4-colour palette and packs it into the 1.54"
      * panel's single 2-bit RAM buffer: 200x200, 4 pixels per byte, 50 bytes/row
-     * (10000 bytes). Same packing/palette/dither as the BMXR path.
+     * (10000 bytes). Same packing/palette/dither as the BMXR path, but this panel
+     * scans X in the opposite direction, so the source is mirrored horizontally.
      */
     private fun encode154(bitmap: Bitmap, dither: Boolean): ByteArray {
         val size = 200
-        val scaled = Bitmap.createScaledBitmap(bitmap, size, size, false)
+        val base = Bitmap.createScaledBitmap(bitmap, size, size, false)
+        val mirror = Matrix().apply { preScale(-1f, 1f) }
+        val scaled = Bitmap.createBitmap(base, 0, 0, size, size, mirror, false)
         val pixels = IntArray(size * size)
         scaled.getPixels(pixels, 0, size, 0, 0, size, size)
         return packIndices(toIndices(pixels, size, size, dither), size, size)

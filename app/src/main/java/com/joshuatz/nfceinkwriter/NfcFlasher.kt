@@ -10,6 +10,7 @@ import android.nfc.NdefMessage
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.NfcA
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -118,7 +119,11 @@ class NfcFlasher : AppCompatActivity() {
         val nfcIntent = Intent(this, javaClass).apply {
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        this.mPendingIntent = PendingIntent.getActivity(this, 0, intent, 0)
+        // Foreground-dispatch PendingIntent must be mutable so the NFC system can
+        // fill in the discovered tag. targetSdk 31+ requires an explicit flag.
+        val pendingIntentFlags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        this.mPendingIntent = PendingIntent.getActivity(this, 0, intent, pendingIntentFlags)
         // Set up the filters
         var ndefIntentFilter: IntentFilter = IntentFilter(NfcAdapter.ACTION_NDEF_DISCOVERED)
         try {

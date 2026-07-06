@@ -1,6 +1,5 @@
 package com.joshuatz.nfceinkwriter
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -13,15 +12,37 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.SwitchCompat
 import androidx.cardview.widget.CardView
-import com.canhub.cropper.CropImage
+import com.canhub.cropper.CropImageContract
+import com.canhub.cropper.CropImageContractOptions
+import com.canhub.cropper.CropImageOptions
 import com.canhub.cropper.CropImageView
 
 class MainActivity : AppCompatActivity() {
     private var mPreferencesController: Preferences? = null
     private var mHasReFlashableImage: Boolean = false
     private val mReFlashButton: CardView get() = findViewById(R.id.reflashButton)
+
+    // Modern activity-result API for the image cropper (replaces the deprecated
+    // startActivityForResult / onActivityResult flow).
+    private val cropImage = registerForActivityResult(CropImageContract()) { result ->
+        if (result.isSuccessful) {
+            val croppedBitmap = result.getBitmap(this)
+            if (croppedBitmap != null) {
+                // Resizing was requested via RESIZE_EXACT, so just persist and flash.
+                openFileOutput(GeneratedImageFilename, Context.MODE_PRIVATE).use { fileOutStream ->
+                    croppedBitmap.compress(Bitmap.CompressFormat.PNG, 100, fileOutStream)
+                }
+                startActivity(Intent(this, NfcFlasher::class.java))
+            } else {
+                Log.e("Crop image callback", "Crop image result not available")
+            }
+        } else {
+            Log.e("Crop image callback", "Crop failed: ${result.error}")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,12 +83,20 @@ class MainActivity : AppCompatActivity() {
         imageFilePickerCTA.setOnClickListener {
             val screenSizePixels = this.mPreferencesController?.getScreenSizePixels()!!
 
-            CropImage
-                .activity()
-                .setGuidelines(CropImageView.Guidelines.ON)
-                .setAspectRatio(screenSizePixels.first, screenSizePixels.second)
-                .setRequestedSize(screenSizePixels.first, screenSizePixels.second, CropImageView.RequestSizeOptions.RESIZE_EXACT)
-                .start(this)
+            cropImage.launch(
+                CropImageContractOptions(
+                    uri = null,
+                    cropImageOptions = CropImageOptions(
+                        guidelines = CropImageView.Guidelines.ON,
+                        aspectRatioX = screenSizePixels.first,
+                        aspectRatioY = screenSizePixels.second,
+                        fixAspectRatio = true,
+                        outputRequestWidth = screenSizePixels.first,
+                        outputRequestHeight = screenSizePixels.second,
+                        outputRequestSizeOptions = CropImageView.RequestSizeOptions.RESIZE_EXACT,
+                    ),
+                )
+            )
         }
 
         // Dither toggle (persisted; applied by the IsoDep flasher)
@@ -93,32 +122,6 @@ class MainActivity : AppCompatActivity() {
         checkReFlashAbility()
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, resultData: Intent?) {
-        super.onActivityResult(requestCode, resultCode, resultData)
-
-        if (requestCode == CropImage.CROP_IMAGE_ACTIVITY_REQUEST_CODE) {
-            val result = CropImage.getActivityResult(resultData)
-            if (resultCode == Activity.RESULT_OK) {
-                var croppedBitmap = result?.getBitmap(this)
-                if (croppedBitmap != null) {
-                    // Resizing should have already been taken care of by setRequestedSize
-                    // Save
-                    openFileOutput(GeneratedImageFilename, Context.MODE_PRIVATE).use { fileOutStream ->
-                        croppedBitmap?.compress(Bitmap.CompressFormat.PNG, 100, fileOutStream)
-                        fileOutStream.close()
-                        // Navigate to flasher
-                        val navIntent = Intent(this, NfcFlasher::class.java)
-                        startActivity(navIntent)
-                    }
-                } else {
-                    Log.e("Crop image callback", "Crop image result not available")
-                }
-            } else if (resultCode == CropImage.CROP_IMAGE_ACTIVITY_RESULT_ERROR_CODE) {
-                val error = result!!.error
-            }
-        }
-    }
-
     private fun updateScreenSizeDisplay(updated: String?) {
         var screenSizeStr = updated
         if (screenSizeStr == null) {
@@ -139,7 +142,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             // Grey out button
             mReFlashButton.setCardBackgroundColor(Color.DKGRAY)
-            val drawableImg = resources.getDrawable(android.R.drawable.stat_sys_warning, null)
+            val drawableImg = AppCompatResources.getDrawable(this, android.R.drawable.stat_sys_warning)
             reFlashImagePreview.setImageDrawable(drawableImg)
         }
     }

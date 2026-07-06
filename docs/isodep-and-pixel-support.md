@@ -126,9 +126,15 @@ each pixel snaps to its nearest palette colour. The setting is persisted.
 
 ## Build notes
 
-The project targets a 2021‑era toolchain (Gradle 6.5, AGP 4.1.3), which requires
-**JDK 11** and Android **platform 30 / build‑tools 30.0.3**. Build with:
+The toolchain was modernised to Gradle 8.11.1, AGP 8.9.1, Kotlin 2.0.21,
+`compileSdk`/`targetSdk` 36 and `minSdk` 24. Building requires **JDK 17** and
+Android **platform 36 / build‑tools 36**:
 
 ```bash
-JAVA_HOME=<jdk-11> ANDROID_HOME=<sdk> ./gradlew assembleDebug
+JAVA_HOME=<jdk-17> ANDROID_HOME=<sdk> ./gradlew assembleDebug
 ```
+
+The image cropper was migrated from the deprecated
+`startActivityForResult`/`onActivityResult` flow to
+`registerForActivityResult(CropImageContract())`
+(`com.vanniktech:android-image-cropper`).

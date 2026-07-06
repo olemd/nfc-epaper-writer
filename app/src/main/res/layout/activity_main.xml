@@ -71,15 +71,27 @@
         app:layout_constraintStart_toStartOf="@+id/cta_pick_image_file"
         app:layout_constraintTop_toBottomOf="@+id/cta_pick_image_file" />
 
+    <!-- Graphic (WYSIWYG/JSPaint) editor is disabled pending a bug fix. -->
     <Button
         android:id="@+id/cta_new_graphic"
         android:layout_width="241dp"
         android:layout_height="65dp"
         android:layout_marginTop="36dp"
+        android:visibility="gone"
         android:text="@string/cta_new_graphic_invite"
         app:layout_constraintTop_toBottomOf="@+id/cta_new_text"
         app:layout_constraintStart_toStartOf="@+id/cta_new_text"
         tools:layout_editor_absoluteX="84dp" />
+
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/ditherToggle"
+        android:layout_width="241dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="36dp"
+        android:checked="true"
+        android:text="@string/dither_toggle_label"
+        app:layout_constraintStart_toStartOf="@+id/cta_new_text"
+        app:layout_constraintTop_toBottomOf="@+id/cta_new_text" />
 
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/main_toolbar"

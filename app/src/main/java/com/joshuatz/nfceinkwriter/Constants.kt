@@ -7,7 +7,10 @@ const val WaveShareUID = "WSDZ10m"
 // Order matches WS SDK Enum (except off by 1, due to zero-index)
 // @see https://www.waveshare.com/wiki/Android_SDK_for_NFC-Powered_e-Paper
 // @see https://github.com/RfidResearchGroup/proxmark3/blob/0d1f8ca957c0ae6f3039237889cdabe5921afe2d/client/src/cmdhfwaveshare.c#L81-L90
+// Display order for the picker. This is decoupled from the WaveShare NfcA SDK
+// enum (see ScreenSizeToWsEnum), so it can be reordered freely.
 val ScreenSizes = arrayOf(
+    "1.54\"",
     "2.13\"",
     "2.9\"",
     "4.2\"",
@@ -17,7 +20,20 @@ val ScreenSizes = arrayOf(
     "2.9\" v.B",
 )
 
-val DefaultScreenSize = ScreenSizes[1]
+val DefaultScreenSize = "2.9\""
+
+// Maps a screen size to its 1-based index in the WaveShare NfcA SDK enum. Only
+// used by the legacy NfcA flash path; IsoDep displays (e.g. 1.54") don't use it.
+val ScreenSizeToWsEnum = mapOf(
+    "2.13\"" to 1,
+    "2.9\"" to 2,
+    "4.2\"" to 3,
+    "7.5\"" to 4,
+    "7.5\" HD" to 5,
+    "2.7\"" to 6,
+    "2.9\" v.B" to 7,
+    "1.54\"" to 0,
+)
 
 val ScreenSizesInPixels = mapOf(
     // The true resolution for 2.13" is 250x122, but there is a (likely) typo in the SDK
@@ -29,6 +45,8 @@ val ScreenSizesInPixels = mapOf(
     "7.5\" HD" to Pair(880, 528),
     "2.7\"" to Pair(264, 176),
     "2.9\" v.B" to Pair(296, 128),
+    // Square panel — a 200x200 canvas avoids non-uniform scaling at flash time.
+    "1.54\"" to Pair(200, 200),
 )
 
 object Constants {
@@ -39,6 +57,7 @@ object Constants {
 object PrefKeys {
     var DisplaySize = "Display_Size"
     var GeneratedImgPath = "Generated_Image_Path"
+    var DitherEnabled = "Dither_Enabled"
 }
 
 object IntentKeys {

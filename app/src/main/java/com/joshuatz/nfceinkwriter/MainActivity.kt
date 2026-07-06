@@ -13,6 +13,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.cardview.widget.CardView
 import com.canhub.cropper.CropImage
 import com.canhub.cropper.CropImageView
@@ -69,12 +70,15 @@ class MainActivity : AppCompatActivity() {
                 .start(this)
         }
 
-        // Setup WYSIWYG button click
-        val wysiwygEditButtonInvite: Button = findViewById(R.id.cta_new_graphic)
-        wysiwygEditButtonInvite.setOnClickListener {
-            val intent = Intent(this, WysiwygEditor::class.java)
-            startActivity(intent)
+        // Dither toggle (persisted; applied by the IsoDep flasher)
+        val ditherToggle: SwitchCompat = findViewById(R.id.ditherToggle)
+        ditherToggle.isChecked = this.mPreferencesController?.getDitherEnabled() ?: true
+        ditherToggle.setOnCheckedChangeListener { _, isChecked ->
+            this.mPreferencesController?.setDitherEnabled(isChecked)
         }
+
+        // Note: the WYSIWYG/graphic editor is disabled pending a bug fix; its
+        // button is hidden in the layout.
 
         // Setup text button click
         val textEditButtonInvite: Button = findViewById(R.id.cta_new_text)

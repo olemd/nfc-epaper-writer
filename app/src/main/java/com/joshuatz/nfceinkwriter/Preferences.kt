@@ -27,7 +27,18 @@ class Preferences {
 
     fun getScreenSizeEnum(): Int {
         val screenSize: String = this.getPreferences().getString(PreferenceKeys.DisplaySize, DefaultScreenSize)!!
-        return (ScreenSizes.indexOf(screenSize) + 1)
+        return ScreenSizeToWsEnum[screenSize] ?: 0
+    }
+
+    fun getDitherEnabled(): Boolean {
+        return this.getPreferences().getBoolean(PreferenceKeys.DitherEnabled, true)
+    }
+
+    fun setDitherEnabled(enabled: Boolean) {
+        with(this.getPreferences().edit()) {
+            putBoolean(PreferenceKeys.DitherEnabled, enabled)
+            apply()
+        }
     }
 
     fun getScreenSizePixels(): Pair<Int, Int> {

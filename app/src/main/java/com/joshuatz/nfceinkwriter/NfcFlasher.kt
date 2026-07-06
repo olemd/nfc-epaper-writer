@@ -191,8 +191,9 @@ class NfcFlasher : AppCompatActivity() {
             if (IsoDepFlasher.isSupported(detectedTag) && !mIsFlashing) {
                 Log.v("IsoDep", "IsoDep-capable tag detected, flashing via IsoDep")
                 mIsFlashing = true
+                val dither = preferences.getDitherEnabled()
                 lifecycleScope.launch(Dispatchers.IO) {
-                    val result = IsoDepFlasher.flash4Color(detectedTag, bitmap) { pct ->
+                    val result = IsoDepFlasher.flash4Color(detectedTag, bitmap, dither) { pct ->
                         runOnUiThread { updateProgressBar(pct) }
                     }
                     runOnUiThread {

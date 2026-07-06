@@ -3,6 +3,7 @@
     <string name="pick_image_file_cta_text">Load Image</string>
     <string name="cta_new_text_invite">New - Text</string>
     <string name="cta_new_graphic_invite">New - Graphic</string>
+    <string name="dither_toggle_label">Dither photos</string>
     <string name="currDisplaySizeDefaultText">Select a Display Size</string>
     <string name="flashButtonText">Flash / Program</string>
     <string name="image_preview_content_description">Image to Flash Preview</string>

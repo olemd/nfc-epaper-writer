@@ -61,7 +61,7 @@ object IsoDepFlasher {
      * Runs the handshake, writes [bitmap] to the display and refreshes.
      * Blocking — call off the main thread. [onProgress] reports 0..100.
      */
-    fun flash4Color(tag: Tag, bitmap: Bitmap, onProgress: (Int) -> Unit): IsoDepResult {
+    fun flash4Color(tag: Tag, bitmap: Bitmap, dither: Boolean, onProgress: (Int) -> Unit): IsoDepResult {
         val isoDep = IsoDep.get(tag)
             ?: return IsoDepResult(false, "Tag is not IsoDep-capable")
 
@@ -79,7 +79,7 @@ object IsoDepFlasher {
             // SSD1681-style command set over 74-prefixed APDUs.
             if (descA.isEmpty() || descA[0] != 0xA0.toByte()) {
                 Log.i(TAG, "DESC-A not A0 (${descA.toHex()}); using SSD1681/1.54in path")
-                return flash154(isoDep, bitmap, onProgress)
+                return flash154(isoDep, bitmap, dither, onProgress)
             }
             transceiveLogged(isoDep, "F0D8000005000000000E", "DESC-B")
 
@@ -89,7 +89,7 @@ object IsoDepFlasher {
 
             // Single 2-bit buffer in the panel's native portrait geometry
             // (128x296, 32 bytes/row = 9472 bytes, 38 APDU rows).
-            val buf = encode4Color(bitmap, desc)
+            val buf = encode4Color(bitmap, desc, dither)
             Log.i(TAG, "Encoded ${buf.size} bytes for ${desc.width}x${desc.height}")
             if (!writeBmpData(isoDep, buf, plane = 0, onProgress = onProgress)) {
                 return IsoDepResult(false, "Write failed (see log for failing APDU)")
@@ -139,26 +139,20 @@ object IsoDepFlasher {
     }
 
     /**
-     * Quantises [bitmap] to the 4-colour palette (one 2-bit index per pixel) and
-     * packs it into the panel's native portrait framebuffer (128x296), 4 pixels
-     * per byte. The authored text is landscape, so it is rotated 90° to portrait
-     * before scaling. Produces a single width*height/4-byte buffer.
+     * Dithers [bitmap] to the 4-colour palette and packs it into the panel's
+     * native portrait framebuffer (128x296), 4 pixels per byte. The authored
+     * text is landscape, so it is rotated 90° to portrait before scaling.
+     * Produces a single width*height/4-byte buffer.
      */
-    private fun encode4Color(bitmap: Bitmap, desc: DeviceDescriptor): ByteArray {
+    private fun encode4Color(bitmap: Bitmap, desc: DeviceDescriptor, dither: Boolean): ByteArray {
         val w = desc.width  // 128
         val h = desc.height // 296
         val m = Matrix().apply { postRotate(270f) }
         val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
         val scaled = Bitmap.createScaledBitmap(rotated, w, h, false)
-        val indices = ByteArray(w * h)
-        val rowPixels = IntArray(w)
-        for (y in 0 until h) {
-            scaled.getPixels(rowPixels, 0, w, 0, y, w, 1)
-            for (x in 0 until w) {
-                indices[y * w + x] = quantize(rowPixels[x]).toByte()
-            }
-        }
-        return packIndices(indices, w, h)
+        val pixels = IntArray(w * h)
+        scaled.getPixels(pixels, 0, w, 0, 0, w, h)
+        return packIndices(toIndices(pixels, w, h, dither), w, h)
     }
 
     /**
@@ -187,28 +181,67 @@ object IsoDepFlasher {
         return out
     }
 
-    /** Nearest of black/white/red/yellow, returned as the panel's colour code. */
-    private fun quantize(argb: Int): Int {
-        val r = (argb shr 16) and 0xFF
-        val g = (argb shr 8) and 0xFF
-        val b = argb and 0xFF
-        val palette = arrayOf(
-            Triple(0, 0, 0) to IDX_BLACK,
-            Triple(255, 255, 255) to IDX_WHITE,
-            Triple(255, 0, 0) to IDX_RED,
-            Triple(255, 255, 0) to IDX_YELLOW,
-        )
-        var best = IDX_WHITE
-        var bestDist = Int.MAX_VALUE
-        for ((rgb, code) in palette) {
-            val (pr, pg, pb) = rgb
-            val dist = (r - pr) * (r - pr) + (g - pg) * (g - pg) + (b - pb) * (b - pb)
-            if (dist < bestDist) {
-                bestDist = dist
-                best = code
+    // 4-colour palette as RGB, indexed by the panel's 2-bit colour code.
+    private val PALETTE_RGB = arrayOf(
+        intArrayOf(0, 0, 0),       // 0 black
+        intArrayOf(255, 255, 255), // 1 white
+        intArrayOf(255, 255, 0),   // 2 yellow
+        intArrayOf(255, 0, 0),     // 3 red
+    )
+
+    /**
+     * Maps [pixels] (row-major ARGB, [w]x[h]) to one 2-bit palette index (0..3)
+     * per pixel. When [dither] is true, uses Floyd–Steinberg error diffusion
+     * (7/16 right, 3/16 below-left, 5/16 below, 1/16 below-right) to preserve tone
+     * in photos; already palette-exact content (e.g. black-on-white text) is left
+     * crisp either way. When false, each pixel snaps to its nearest palette colour.
+     */
+    private fun toIndices(pixels: IntArray, w: Int, h: Int, dither: Boolean): ByteArray {
+        val r = IntArray(w * h)
+        val g = IntArray(w * h)
+        val b = IntArray(w * h)
+        for (i in pixels.indices) {
+            r[i] = (pixels[i] shr 16) and 0xFF
+            g[i] = (pixels[i] shr 8) and 0xFF
+            b[i] = pixels[i] and 0xFF
+        }
+        val out = ByteArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val i = y * w + x
+                val code = nearestCode(r[i], g[i], b[i])
+                out[i] = code.toByte()
+                if (!dither) continue
+                val p = PALETTE_RGB[code]
+                val er = r[i] - p[0]
+                val eg = g[i] - p[1]
+                val eb = b[i] - p[2]
+                diffuse(r, g, b, x + 1, y, w, h, er, eg, eb, 7)
+                diffuse(r, g, b, x - 1, y + 1, w, h, er, eg, eb, 3)
+                diffuse(r, g, b, x, y + 1, w, h, er, eg, eb, 5)
+                diffuse(r, g, b, x + 1, y + 1, w, h, er, eg, eb, 1)
             }
         }
+        return out
+    }
+
+    private fun nearestCode(r: Int, g: Int, b: Int): Int {
+        var best = IDX_WHITE
+        var bestDist = Int.MAX_VALUE
+        for (code in PALETTE_RGB.indices) {
+            val p = PALETTE_RGB[code]
+            val d = (r - p[0]) * (r - p[0]) + (g - p[1]) * (g - p[1]) + (b - p[2]) * (b - p[2])
+            if (d < bestDist) { bestDist = d; best = code }
+        }
         return best
+    }
+
+    private fun diffuse(r: IntArray, g: IntArray, b: IntArray, x: Int, y: Int, w: Int, h: Int, er: Int, eg: Int, eb: Int, num: Int) {
+        if (x < 0 || x >= w || y < 0 || y >= h) return
+        val i = y * w + x
+        r[i] = (r[i] + er * num / 16).coerceIn(0, 255)
+        g[i] = (g[i] + eg * num / 16).coerceIn(0, 255)
+        b[i] = (b[i] + eb * num / 16).coerceIn(0, 255)
     }
 
     /**
@@ -333,7 +366,7 @@ object IsoDepFlasher {
      * then the refresh trigger and busy-poll. The panel is NFC-powered, so the
      * poll (and the 10s settle) must keep the field alive through the refresh.
      */
-    private fun flash154(isoDep: IsoDep, bitmap: Bitmap, onProgress: (Int) -> Unit): IsoDepResult {
+    private fun flash154(isoDep: IsoDep, bitmap: Bitmap, dither: Boolean, onProgress: (Int) -> Unit): IsoDepResult {
         return try {
             // Auth with the app's fixed unlock key + init.
             isoDep.transceive(bytes(0x74, 0xB1, 0x00, 0x00, 0x08, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77))
@@ -349,7 +382,7 @@ object IsoDepFlasher {
 
             // Begin RAM write, stream the 2-bit image, then commit.
             isoDep.transceive(bytes(0x74, 0x01, 0x15, 0x01, 0x00))
-            val buf = encode154(bitmap)
+            val buf = encode154(bitmap, dither)
             Log.i(TAG, "1.54in encoded ${buf.size} bytes")
             if (!writeRam154(isoDep, buf) { onProgress(it) }) {
                 return IsoDepResult(false, "1.54in: RAM write failed")
@@ -379,21 +412,15 @@ object IsoDepFlasher {
     }
 
     /**
-     * Quantises [bitmap] to the 4-colour palette and packs it into the 1.54"
+     * Dithers [bitmap] to the 4-colour palette and packs it into the 1.54"
      * panel's single 2-bit RAM buffer: 200x200, 4 pixels per byte, 50 bytes/row
-     * (10000 bytes). Same packing/palette as the BMXR path.
+     * (10000 bytes). Same packing/palette/dither as the BMXR path.
      */
-    private fun encode154(bitmap: Bitmap): ByteArray {
+    private fun encode154(bitmap: Bitmap, dither: Boolean): ByteArray {
         val size = 200
         val scaled = Bitmap.createScaledBitmap(bitmap, size, size, false)
-        val indices = ByteArray(size * size)
-        val rowPixels = IntArray(size)
-        for (y in 0 until size) {
-            scaled.getPixels(rowPixels, 0, size, 0, y, size, 1)
-            for (x in 0 until size) {
-                indices[y * size + x] = quantize(rowPixels[x]).toByte()
-            }
-        }
-        return packIndices(indices, size, size)
+        val pixels = IntArray(size * size)
+        scaled.getPixels(pixels, 0, size, 0, 0, size, size)
+        return packIndices(toIndices(pixels, size, size, dither), size, size)
     }
 }
